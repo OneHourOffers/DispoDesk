@@ -136,7 +136,18 @@
     background:rgba(78,159,255,.12);color:var(--accent);white-space:nowrap}
   .signed-chip.none{background:transparent;color:var(--muted);border:1px dashed var(--muted);opacity:.5}
   .mkt-chip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px;
-    background:rgba(240,128,128,.14);color:#F08080;white-space:nowrap}
+    background:rgba(240,128,128,.14);color:#F08080;white-space:nowrap;
+    position:relative;cursor:pointer}
+  .mkt-chip:hover{filter:brightness(1.25)}
+  .mkt-date-in{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+  .dbx-chip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px;
+    background:rgba(30,138,110,.18);color:#35d48a;white-space:nowrap;cursor:pointer;border:0;
+    display:inline-flex;align-items:center;gap:6px}
+  .dbx-chip:hover{filter:brightness(1.25)}
+  .dbx-chip.none{background:transparent;color:var(--muted);border:1px dashed var(--muted);opacity:.5}
+  .dbx-chip.none:hover{opacity:1;color:#35d48a;border-color:#35d48a;filter:none}
+  .dbx-act{font-style:normal;opacity:.7;padding:0 1px}
+  .dbx-act:hover{opacity:1;transform:scale(1.15)}
   .mkt-chip.none{background:transparent;color:var(--muted);border:1px dashed var(--muted);opacity:.5}
   @keyframes newPulse{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}50%{box-shadow:0 0 0 7px rgba(34,197,94,0)}}
   .lane{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px;overflow:hidden}
@@ -561,6 +572,55 @@ function daysMkt(d){
   const now=new Date();now.setHours(0,0,0,0);
   return Math.max(0,Math.round((now-start)/86400000));
 }
+// M/d/yy -> yyyy-mm-dd (for the date input); "" if unset
+function mkt2iso(v){
+  const p=String(v||"").split("/");if(p.length<3)return"";
+  let y=Number(p[2]);if(y<100)y+=2000;
+  return y+"-"+String(p[0]).padStart(2,"0")+"-"+String(p[1]).padStart(2,"0");
+}
+function setMktDate(id,iso){
+  const d=ST.deals.find(x=>x.id===id);if(!d)return;
+  if(!iso){d.mktStart="";}
+  else{const p=iso.split("-");d.mktStart=Number(p[1])+"/"+Number(p[2])+"/"+String(p[0]).slice(2);}
+  save("deals");render();
+}
+//=================== DROPBOX LINK ===================
+function dropboxChip(d){
+  if(!d.dropbox)return `<button class="dbx-chip none" title="Paste the Dropbox link for this deal" onclick="editDropbox('${d.id}')">&#128230; + Dropbox</button>`;
+  return `<span class="dbx-chip" title="Click to copy the Dropbox link" onclick="copyDropbox('${d.id}')">&#128230; Dropbox`+
+    `<i class="dbx-act" title="Open link" onclick="event.stopPropagation();window.open(ST.deals.find(x=>x.id==='${d.id}').dropbox,'_blank')">&#8599;</i>`+
+    `<i class="dbx-act" title="Change link" onclick="event.stopPropagation();editDropbox('${d.id}')">&#9998;</i></span>`;
+}
+function editDropbox(id){
+  const d=ST.deals.find(x=>x.id===id);if(!d)return;
+  let v=prompt("Paste the Dropbox link for "+d.addr+":",d.dropbox||"");
+  if(v===null)return;
+  v=v.trim();
+  if(v&&!/^https?:\/\//i.test(v))v="https://"+v;
+  d.dropbox=v;save("deals");render();
+  toast(v?"Dropbox link saved":"Dropbox link removed");
+  pushDropboxToSheet(d);
+}
+// Mirror the link into the sheet: cell note on the Address column.
+// Preserves any existing note text; replaces only its "Dropbox:" line.
+async function pushDropboxToSheet(d){
+  if(d.src!=="tracker"||!d.sheetRow)return;
+  const base=String(d.addrNote||"").split(/\r?\n/).filter(l=>!/^\s*dropbox:/i.test(l)).join("\n").trim();
+  const note=d.dropbox?((base?base+"\n":"")+"Dropbox: "+d.dropbox):base;
+  try{
+    const r=await fetch(TRACKER_API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({token:TRACKER_TOKEN,action:"updateNote",row:d.sheetRow,address:d.sheetAddr||d.addr,colKey:"ADDRESS",note:note})});
+    const j=await r.json();
+    if(j&&j.ok){if(j.row)d.sheetRow=j.row;d.addrNote=note;save("deals");toast(d.dropbox?"Link added to tracker address note":"Link cleared from tracker note");}
+    else toast("Tracker note update failed"+(j&&j.error?": "+j.error:""));
+  }catch(e){toast("Tracker note update failed \u2014 check connection");}
+}
+function copyDropbox(id){
+  const d=ST.deals.find(x=>x.id===id);if(!d||!d.dropbox)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(d.dropbox);}
+  else{const t=document.createElement("textarea");t.value=d.dropbox;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove();}
+  toast("Dropbox link copied");
+}
 // Tracker cards: dropdown mirrors the sheet's Status dropdown, writes back verbatim.
 function setSheetStatus(id,val){
   const d=ST.deals.find(x=>x.id===id);if(!d)return;
@@ -657,12 +717,14 @@ function renderCascade(){
           <div class="cdeal-id">${stars(d)}
             <div><div class="cdeal-addr">${esc(d.addr)}</div>
               <div class="cdeal-sub">${esc(d.city)} ${d.zip}${m.needs?'':' · '+kfmt(m.spread)+' spread'}</div>
-              <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${statusSelect(d)}<span class="signed-chip${d.contract?'':' none'}">&#9998; Signed ${d.contract?esc(d.contract):"\u2014"}</span><span class="mkt-chip${d.mktStart?'':' none'}">&#128227; Mkt ${d.mktStart?esc(d.mktStart)+" \u00b7 <b>"+daysMkt(d)+"d</b>":"\u2014"}</span></div>
+              <div style="margin-top:6px"><span class="signed-chip${d.contract?'':' none'}">&#9998; Signed ${d.contract?esc(d.contract):"\u2014"}</span></div>
+              <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${statusSelect(d)}<label class="mkt-chip${d.mktStart?'':' none'}" title="Click to set / change the marketing start date">&#128227; Mkt ${d.mktStart?esc(d.mktStart)+" \u00b7 <b>"+daysMkt(d)+"d</b>":"\u2014"}<input type="date" class="mkt-date-in" value="${mkt2iso(d.mktStart)}" onchange="setMktDate('${d.id}',this.value)"></label>${dropboxChip(d)}</div>
               ${statsSummary(d)}</div>
           </div>
-          <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">
-            <button class="btn ghost sm" onclick="openStats('${d.id}')">Stats</button>
-            <button class="new-badge ${d.isNew?"on":"off"}" title="${d.isNew?"Click to clear":"Click to flag NEW for dispo"}" onclick="toggleNew('${d.id}')">NEW</button>
+          <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">${(()=>{
+            const statsBtn=`<button class="btn ghost sm" onclick="openStats('${d.id}')">Stats</button>`;
+            const newBtn=`<button class="new-badge ${d.isNew?"on":"off"}" title="${d.isNew?"Click to clear":"Click to flag NEW for dispo"}" onclick="toggleNew('${d.id}')">NEW</button>`;
+            return d.isNew?newBtn+statsBtn:statsBtn+newBtn;})()}
           </div>
         </div>
         <div class="cdeal-flow">${blastFlow(d)}${progBar(d.id)}</div>
@@ -984,7 +1046,8 @@ async function syncTracker(silent){
         const key=normAddr(p.addr);
         if(!key)return;
         const ex=byKey[key];
-        if(ex){ex.sheetRow=row.row;ex.sheetAddr=row.address;if(row.contract)ex.contract=String(row.contract);}  // keep write-back pointer fresh
+        if(ex){ex.sheetRow=row.row;ex.sheetAddr=row.address;if(row.contract)ex.contract=String(row.contract);
+          if(row.cellNotes&&row.cellNotes.ADDRESS!=null)ex.addrNote=String(row.cellNotes.ADDRESS);}  // keep write-back pointer fresh
         if(kind==="sale"&&!row.cancelled){
           saleKeys.add(key);
           if(ex){
@@ -1003,6 +1066,7 @@ async function syncTracker(silent){
             addr:p.addr,city:p.city,st:p.st,zip:p.zip,
             status:deskStatusFor(row.status),tstatus:String(row.status||""),uc:price||null,
             mktStart:deskStatusFor(row.status)==="Marketing"?mdy():"",
+            addrNote:(row.cellNotes&&row.cellNotes.ADDRESS)?String(row.cellNotes.ADDRESS):"",
             note:row.coe?("COE "+row.coe):""});
           have.add(key);added++;
         }else if(kind==="sold"){soldKeys.add(key);}
@@ -1033,7 +1097,7 @@ async function syncTracker(silent){
 }
 window.syncTracker=syncTracker;
 
-Object.assign(window,{toggleBlast,setRating,setStatus,setSheetStatus,toggleNew,openStats,setDetail,setMktTab,printBrochure,copyBrochure,delBuyer,copyCopy,setMkt,switchView,addDeal,editDeal,loadSamples,gotoBuyers});
+Object.assign(window,{toggleBlast,setRating,setStatus,setSheetStatus,toggleNew,setMktDate,editDropbox,copyDropbox,openStats,setDetail,setMktTab,printBrochure,copyBrochure,delBuyer,copyCopy,setMkt,switchView,addDeal,editDeal,loadSamples,gotoBuyers});
 
 (async()=>{
   await load();render();
