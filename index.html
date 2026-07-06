@@ -1043,7 +1043,7 @@ async function syncTracker(silent){
     const byKey={};ST.deals.forEach(d=>{const k=normAddr(d.addr);if(k&&!byKey[k])byKey[k]=d;});
     if(j.dropdowns&&Array.isArray(j.dropdowns.STATUS)&&j.dropdowns.STATUS.length){ST.dd=j.dropdowns.STATUS.map(String);save("dd");}
     const saleKeys=new Set(),soldKeys=new Set(),otherKeys=new Set();
-    let added=0,restatused=0;
+    let added=0,restatused=0,restored=0;
     j.sections.forEach(secObj=>{
       const sec=String(secObj.name||"").toUpperCase();
       const kind=sec.indexOf(SEC_ACTIVE)>-1?"sale":(SEC_SOLD.some(s=>sec.indexOf(s)>-1)?"sold":"other");
@@ -1057,8 +1057,11 @@ async function syncTracker(silent){
         if(kind==="sale"&&!row.cancelled){
           saleKeys.add(key);
           if(ex){
-            // sheet status changed externally -> reflect it on the card
-            if(!DEAD_STATES.includes(ex.status)&&String(ex.tstatus||"")!==String(row.status||"")){
+            if(ex.src==="tracker"&&DEAD_STATES.includes(ex.status)){
+              // sheet says it's for sale again -> pull the card out of the archive
+              ex.status=deskStatusFor(row.status);ex.tstatus=String(row.status||"");restored++;
+            }else if(!DEAD_STATES.includes(ex.status)&&String(ex.tstatus||"")!==String(row.status||"")){
+              // sheet status changed externally -> reflect it on the card
               ex.tstatus=String(row.status||"");ex.status=deskStatusFor(row.status);restatused++;
               if(ex.status==="Marketing"){ex.isNew=false;if(!ex.mktStart)ex.mktStart=mdy();}
               if(ex.status==="Need Pics")ex.mktStart="";
@@ -1092,9 +1095,9 @@ async function syncTracker(silent){
       else{d.status="Cancel";axed++;}
     });
     save("deals");   // always persist refreshed write-back pointers
-    if(added||sold||axed||restatused){render();}
-    if(!silent||added||sold||axed){
-      const bits=[];if(added)bits.push("+"+added+" new");
+    if(added||sold||axed||restatused||restored){render();}
+    if(!silent||added||sold||axed||restored){
+      const bits=[];if(added)bits.push("+"+added+" new");if(restored)bits.push(restored+" back on the board");
       if(sold)bits.push(sold+" \u2192 Sold Deals");if(axed)bits.push(axed+" \u2192 Cancel");
       if(restatused)bits.push(restatused+" status update"+(restatused>1?"s":""));
       toast(bits.length?("Tracker sync: "+bits.join(", ")):"Tracker sync: up to date");
