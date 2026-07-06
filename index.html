@@ -124,6 +124,21 @@
   .cascade-legend{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;font-size:12px;color:var(--muted)}
   .cascade-legend span{display:flex;align-items:center;gap:6px;font-family:var(--mono)}
   .cascade-legend i{width:10px;height:10px;border-radius:3px}
+  .new-badge{display:inline-block;padding:6px 10px;border-radius:8px;border:1px solid transparent;
+    font-family:var(--mono);font-weight:800;font-size:11.5px;text-align:center;
+    letter-spacing:.08em;cursor:pointer;user-select:none;line-height:1}
+  .new-badge.on{background:#22C55E;color:#06140c;animation:newPulse 1.4s ease-in-out infinite}
+  .new-badge.on:hover{animation:none;background:#EF4444;color:#fff}
+  .new-badge.on:hover::after{content:" \2715"}
+  .new-badge.off{background:transparent;color:var(--muted);border:1px dashed var(--muted);opacity:.35}
+  .new-badge.off:hover{opacity:1;color:#22C55E;border-color:#22C55E}
+  .signed-chip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px;
+    background:rgba(78,159,255,.12);color:var(--accent);white-space:nowrap}
+  .signed-chip.none{background:transparent;color:var(--muted);border:1px dashed var(--muted);opacity:.5}
+  .mkt-chip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:5px;
+    background:rgba(240,128,128,.14);color:#F08080;white-space:nowrap}
+  .mkt-chip.none{background:transparent;color:var(--muted);border:1px dashed var(--muted);opacity:.5}
+  @keyframes newPulse{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.55)}50%{box-shadow:0 0 0 7px rgba(34,197,94,0)}}
   .lane{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px;overflow:hidden}
   .lane-head{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line)}
   .lane-head .step{font-family:var(--mono);font-size:12px;color:var(--faint);width:22px}
@@ -286,8 +301,7 @@
     <button data-v="buyers"><i class="ico"></i>VIP Buyer Match</button>
     <button data-v="marketing"><i class="ico"></i>Marketing Prep</button>
   </div>
-  <button class="rail-add" id="railAdd">+ Add deal</button>
-  <button class="rail-add" id="syncBtn" style="margin-top:8px;opacity:.92">&#10227; Sync tracker</button>
+  <button class="rail-add" id="syncBtn">&#10227; Sync tracker</button>
   <div class="rail-foot">
     Auto-pulls PICS &amp; MARKET deals<br>from the Deal Tracker every 5 min
     <br><button id="reset">Reset all data</button>
@@ -387,7 +401,7 @@ if(!window.storage){
 }
 
 //=================== STATE ===================
-let ST={deals:[],blast:{},buyers:null};
+let ST={deals:[],blast:{},buyers:null,dd:null};
 async function load(){
   let hasSaved=false;
   try{const d=await window.storage.get("deals");if(d){ST.deals=JSON.parse(d.value);hasSaved=true;}}catch(e){}
@@ -397,6 +411,7 @@ async function load(){
     if(d.uc==null&&d.ask!=null)d.uc=d.ask;  // old contract price -> UC price
     if(!d.src&&/^[st]/.test(String(d.id)))d.src="tracker";});  // seeds + prior syncs are tracker-sourced
   try{const b=await window.storage.get("blast");if(b)ST.blast=JSON.parse(b.value);}catch(e){}
+  try{const dd=await window.storage.get("dd");if(dd)ST.dd=JSON.parse(dd.value);}catch(e){}
   try{const b=await window.storage.get("buyers");ST.buyers=b?JSON.parse(b.value):SAMPLE_BUYERS.slice();}catch(e){ST.buyers=SAMPLE_BUYERS.slice();}
   if(!ST.buyers)ST.buyers=SAMPLE_BUYERS.slice();
 }
@@ -498,10 +513,9 @@ function renderDeals(){
   $("#dealGrid").innerHTML=`<div class="grid">${list.map(dealCard).join("")}</div>`;
 }
 function emptyState(){
-  return `<div class="empty"><h3>No deals yet</h3>
-    <p>Add the deals from your tracker — the ones marked <b>Marketing</b>, <b>Need Pics</b>, or whatever stage they're at. Enter the UC and marketed price and each shows its spread, projected profit, and blast flow.</p>
-    <button class="btn" onclick="addDeal()">+ Add your first deal</button>
-    <button class="btn ghost" onclick="loadSamples()">Load 5 samples to explore</button></div>`;
+  return `<div class="empty"><h3>No deals on the board</h3>
+    <p>The board fills itself from the Deal Tracker's <b>Deals that need to be Sold</b> section. If something's missing, check the sheet — or pull now.</p>
+    <button class="btn" onclick="syncTracker(false)">&#10227; Sync tracker</button></div>`;
 }
 
 //=================== CASCADE ===================
@@ -518,8 +532,58 @@ function toggleBlast(id,key){
   save("blast");render();
 }
 function setRating(id,n){const d=ST.deals.find(x=>x.id===id);if(!d)return;d.rating=(d.rating===n?0:n);save("deals");render();}
-function setStatus(id,val){const d=ST.deals.find(x=>x.id===id);if(!d)return;d.status=val;save("deals");render();}
+// Map any sheet status value onto the desk's internal board buckets
+// (styling, chips, KPIs). The visible dropdown shows the SHEET's values.
+function deskStatusFor(v){
+  const u=String(v||"").toUpperCase();
+  if(u.indexOf("MARKET")>-1)return"Marketing";
+  if(u.indexOf("PIC")>-1)return"Need Pics";
+  return"Assigned";
+}
+// Push the exact sheet dropdown value to the sheet's Status cell.
+async function pushStatusToSheet(d,val){
+  if(d.src!=="tracker"||!d.sheetRow)return;
+  try{
+    const r=await fetch(TRACKER_API,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({token:TRACKER_TOKEN,action:"updateStatus",row:d.sheetRow,address:d.sheetAddr||d.addr,status:val})});
+    const j=await r.json();
+    if(j&&j.ok){if(j.row)d.sheetRow=j.row;save("deals");toast("Sheet updated \u2192 "+val);}
+    else toast("Sheet update failed"+(j&&j.error?": "+j.error:""));
+  }catch(e){toast("Sheet update failed \u2014 check connection");}
+}
+function toggleNew(id){const d=ST.deals.find(x=>x.id===id);if(!d)return;d.isNew=!d.isNew;save("deals");render();}
+const mdy=t=>{const x=t||new Date();return (x.getMonth()+1)+"/"+x.getDate()+"/"+String(x.getFullYear()).slice(2);};
+function daysMkt(d){
+  if(!d.mktStart)return 0;
+  const p=String(d.mktStart).split("/");if(p.length<3)return 0;
+  let y=Number(p[2]);if(y<100)y+=2000;
+  const start=new Date(y,Number(p[0])-1,Number(p[1]));
+  const now=new Date();now.setHours(0,0,0,0);
+  return Math.max(0,Math.round((now-start)/86400000));
+}
+// Tracker cards: dropdown mirrors the sheet's Status dropdown, writes back verbatim.
+function setSheetStatus(id,val){
+  const d=ST.deals.find(x=>x.id===id);if(!d)return;
+  const old=d.tstatus;
+  d.tstatus=val;d.status=deskStatusFor(val);
+  if(d.status==="Marketing"){d.isNew=false;if(!d.mktStart)d.mktStart=mdy();}  // marketed -> stamp start, clear NEW
+  save("deals");render();
+  if(old!==val)pushStatusToSheet(d,val);
+}
+// Manual (non-tracker) cards keep the desk's own statuses.
+function setStatus(id,val){const d=ST.deals.find(x=>x.id===id);if(!d)return;d.status=val;
+  if(val==="Marketing"&&!d.mktStart)d.mktStart=mdy();
+  save("deals");render();}
 function statusSelect(d){
+  if(d.src==="tracker"){
+    if(DEAD_STATES.includes(d.status))  // archived: section governs, read-only chip
+      return `<span class="status-sel ${stCls(d.status)}" style="pointer-events:none">${d.status}</span>`;
+    const dd=(ST.dd&&ST.dd.length)?ST.dd:["PICS","MARKET"];
+    const cur=d.tstatus&&dd.includes(d.tstatus)?d.tstatus:(dd.find(o=>deskStatusFor(o)===d.status)||d.tstatus||dd[0]);
+    const opts=dd.map(s=>`<option value="${String(s).replace(/"/g,"&quot;")}" ${s===cur?"selected":""}>${s}</option>`).join("");
+    const extra=d.tstatus&&!dd.includes(d.tstatus)?`<option value="${String(d.tstatus).replace(/"/g,"&quot;")}" selected>${d.tstatus}</option>`:"";
+    return `<select class="status-sel ${stCls(d.status)}" title="Status (writes to the sheet)" onchange="setSheetStatus('${d.id}',this.value)">${extra}${opts}</select>`;
+  }
   return `<select class="status-sel ${stCls(d.status)}" title="Change status" onchange="setStatus('${d.id}',this.value)">${STATUSES.map(s=>`<option value="${s}" ${s===d.status?"selected":""}>${s}</option>`).join("")}</select>`;
 }
 function dealStats(d){if(!d.stats||typeof d.stats!=="object")d.stats={walk:0,offers:0,feedback:[]};if(!Array.isArray(d.stats.feedback))d.stats.feedback=[];return d.stats;}
@@ -593,10 +657,13 @@ function renderCascade(){
           <div class="cdeal-id">${stars(d)}
             <div><div class="cdeal-addr">${esc(d.addr)}</div>
               <div class="cdeal-sub">${esc(d.city)} ${d.zip}${m.needs?'':' · '+kfmt(m.spread)+' spread'}</div>
-              <div style="margin-top:6px">${statusSelect(d)}</div>
+              <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${statusSelect(d)}<span class="signed-chip${d.contract?'':' none'}">&#9998; Signed ${d.contract?esc(d.contract):"\u2014"}</span><span class="mkt-chip${d.mktStart?'':' none'}">&#128227; Mkt ${d.mktStart?esc(d.mktStart)+" \u00b7 <b>"+daysMkt(d)+"d</b>":"\u2014"}</span></div>
               ${statsSummary(d)}</div>
           </div>
-          <button class="btn ghost sm" onclick="openStats('${d.id}')">Stats</button>
+          <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">
+            <button class="btn ghost sm" onclick="openStats('${d.id}')">Stats</button>
+            <button class="new-badge ${d.isNew?"on":"off"}" title="${d.isNew?"Click to clear":"Click to flag NEW for dispo"}" onclick="toggleNew('${d.id}')">NEW</button>
+          </div>
         </div>
         <div class="cdeal-flow">${blastFlow(d)}${progBar(d.id)}</div>
       </div>`;
@@ -885,7 +952,6 @@ function render(){rebuild();renderKpis();renderDeals();renderCascade();
 let toastT;function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove("show"),1900);}
 
 $("#nav").onclick=e=>{const b=e.target.closest("button");if(b)switchView(b.dataset.v);};
-$("#railAdd").onclick=addDeal;
 $("#addBuyer").onclick=openBuyerModal;
 $("#reset").onclick=async()=>{ST.deals=SEED_DEALS.map(d=>({...d}));ST.blast={};ST.buyers=SAMPLE_BUYERS.slice();
   try{await window.storage.delete("deals");await window.storage.delete("blast");await window.storage.delete("buyers");}catch(e){}
@@ -906,8 +972,10 @@ async function syncTracker(silent){
     const j=await r.json();
     if(!j||!Array.isArray(j.sections))throw new Error((j&&j.error)||"bad response");
     const have=new Set(ST.deals.map(d=>normAddr(d.addr)));
+    const byKey={};ST.deals.forEach(d=>{const k=normAddr(d.addr);if(k&&!byKey[k])byKey[k]=d;});
+    if(j.dropdowns&&Array.isArray(j.dropdowns.STATUS)&&j.dropdowns.STATUS.length){ST.dd=j.dropdowns.STATUS.map(String);save("dd");}
     const saleKeys=new Set(),soldKeys=new Set(),otherKeys=new Set();
-    let added=0;
+    let added=0,restatused=0;
     j.sections.forEach(secObj=>{
       const sec=String(secObj.name||"").toUpperCase();
       const kind=sec.indexOf(SEC_ACTIVE)>-1?"sale":(SEC_SOLD.some(s=>sec.indexOf(s)>-1)?"sold":"other");
@@ -915,15 +983,26 @@ async function syncTracker(silent){
         const p=parseAddr(row.address);
         const key=normAddr(p.addr);
         if(!key)return;
+        const ex=byKey[key];
+        if(ex){ex.sheetRow=row.row;ex.sheetAddr=row.address;if(row.contract)ex.contract=String(row.contract);}  // keep write-back pointer fresh
         if(kind==="sale"&&!row.cancelled){
           saleKeys.add(key);
-          if(have.has(key))return;
-          const raw=String(row.status||"").toUpperCase().trim();
-          const status=TRACKER_STATUS_MAP[raw]||(raw.indexOf("MARKET")>-1?"Marketing":"Need Pics");
+          if(ex){
+            // sheet status changed externally -> reflect it on the card
+            if(!DEAD_STATES.includes(ex.status)&&String(ex.tstatus||"")!==String(row.status||"")){
+              ex.tstatus=String(row.status||"");ex.status=deskStatusFor(row.status);restatused++;
+              if(ex.status==="Marketing"){ex.isNew=false;if(!ex.mktStart)ex.mktStart=mdy();}
+            }
+            return;
+          }
           const price=typeof row.price==="number"?row.price:(Number(String(row.price||"").replace(/[^0-9.]/g,""))||null);
           ST.deals.unshift({...D0,src:"tracker",
             id:"t"+Date.now().toString(36)+Math.random().toString(36).slice(2,6),
-            addr:p.addr,city:p.city,st:p.st,zip:p.zip,status,uc:price||null,
+            sheetRow:row.row,sheetAddr:row.address,
+            contract:String(row.contract||""),isNew:true,
+            addr:p.addr,city:p.city,st:p.st,zip:p.zip,
+            status:deskStatusFor(row.status),tstatus:String(row.status||""),uc:price||null,
+            mktStart:deskStatusFor(row.status)==="Marketing"?mdy():"",
             note:row.coe?("COE "+row.coe):""});
           have.add(key);added++;
         }else if(kind==="sold"){soldKeys.add(key);}
@@ -941,10 +1020,12 @@ async function syncTracker(silent){
       if(soldKeys.has(k)){d.status="Sold Deals";sold++;}
       else{d.status="Cancel";axed++;}
     });
-    if(added||sold||axed){save("deals");render();}
+    save("deals");   // always persist refreshed write-back pointers
+    if(added||sold||axed||restatused){render();}
     if(!silent||added||sold||axed){
       const bits=[];if(added)bits.push("+"+added+" new");
       if(sold)bits.push(sold+" \u2192 Sold Deals");if(axed)bits.push(axed+" \u2192 Cancel");
+      if(restatused)bits.push(restatused+" status update"+(restatused>1?"s":""));
       toast(bits.length?("Tracker sync: "+bits.join(", ")):"Tracker sync: up to date");
     }
   }catch(e){if(!silent)toast("Tracker sync failed \u2014 check connection & retry");}
@@ -952,7 +1033,7 @@ async function syncTracker(silent){
 }
 window.syncTracker=syncTracker;
 
-Object.assign(window,{toggleBlast,setRating,setStatus,openStats,setDetail,setMktTab,printBrochure,copyBrochure,delBuyer,copyCopy,setMkt,switchView,addDeal,editDeal,loadSamples,gotoBuyers});
+Object.assign(window,{toggleBlast,setRating,setStatus,setSheetStatus,toggleNew,openStats,setDetail,setMktTab,printBrochure,copyBrochure,delBuyer,copyCopy,setMkt,switchView,addDeal,editDeal,loadSamples,gotoBuyers});
 
 (async()=>{
   await load();render();
