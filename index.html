@@ -195,6 +195,11 @@
   .coe-chip.none{background:transparent;color:var(--faint);border:1px dashed var(--line2);opacity:.7}
   .coe-chip.none:hover{opacity:1;color:var(--red);border-color:var(--red);filter:none}
   .coe-date-in{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+  /* 2-up chip grid on each deal card (Status-COE / Signed-Mkt / Title-ACQ) */
+  .chip-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;align-items:start}
+  .chip-grid>*{width:100%;min-width:0;box-sizing:border-box;overflow:hidden}
+  .chip-grid .status-sel{max-width:none}
+  .chip-grid .dbx-chip{grid-column:1 / -1}   /* Dropbox spans the full width */
   /* read-only info chips (ACQ / Title / COE) — display only, no click affordance */
   .acq-chip.ro,.title-chip.ro,.coe-chip.ro{cursor:default}
   .acq-chip.ro:hover,.title-chip.ro:hover,.coe-chip.ro:hover{filter:none}
@@ -851,8 +856,7 @@ function renderCascade(){
           <div class="cdeal-id">${stars(d)}
             <div><div class="cdeal-addr">${esc(d.addr)}</div>
               <div class="cdeal-sub">${esc(d.city)} ${d.zip}${m.needs?'':' · '+kfmt(m.spread)+' spread'}</div>
-              <div style="margin-top:6px"><span class="signed-chip${d.contract?'':' none'}">&#9998; Signed ${d.contract?esc(d.contract):"\u2014"}</span></div>
-              <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">${statusSelect(d)}<label class="mkt-chip${d.mktStart?'':' none'}" title="Click to set / change the marketing start date">&#128227; Mkt ${d.mktStart?esc(d.mktStart)+" \u00b7 <b>"+daysMkt(d)+"d</b>":"\u2014"}<input type="date" class="mkt-date-in" value="${mkt2iso(d.mktStart)}" onchange="setMktDate('${d.id}',this.value)"></label>${acqChip(d)}${titleChip(d)}${coeChip(d)}${dropboxChip(d)}</div>
+              <div class="chip-grid">${statusSelect(d)}${coeChip(d)}<span class="signed-chip${d.contract?'':' none'}">&#9998; Signed ${d.contract?esc(d.contract):"\u2014"}</span><label class="mkt-chip${d.mktStart?'':' none'}" title="Click to set / change the marketing start date">&#128227; Mkt ${d.mktStart?esc(d.mktStart)+" \u00b7 <b>"+daysMkt(d)+"d</b>":"\u2014"}<input type="date" class="mkt-date-in" value="${mkt2iso(d.mktStart)}" onchange="setMktDate('${d.id}',this.value)"></label>${titleChip(d)}${acqChip(d)}${dropboxChip(d)}</div>
               ${statsSummary(d)}</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:6px;align-items:stretch">${(()=>{
